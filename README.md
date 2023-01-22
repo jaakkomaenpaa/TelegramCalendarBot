@@ -11,5 +11,4 @@ Events are saved in an SQLite database. Can be used by multiple users simultaneo
 since it creates a unique table for every user by their Telegram ID.
 
 Note: mainly works as a practice, not very practical...
-
-Unless you want to boycott the real calendar app.
+unless you want to boycott the default calendar app for some reason.
