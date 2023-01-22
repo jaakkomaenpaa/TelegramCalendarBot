@@ -3,10 +3,10 @@ Calendar app for Telegram
 """
 
 from telegram.ext import Updater, CommandHandler
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 import sqlite3
 
-API_TOKEN = "token"
+API_TOKEN = "<insert your token here>"
 
 YEAR = 2023
 
@@ -15,21 +15,20 @@ dispatcher = updater.dispatcher
 
 def get_description(update, context, message):
 
-    if message.count('"') != 2:
-        update.message.reply_text('Needs quotation marks. Try again.')
+    if len(message.split(" ")) < 3:
+        update.message.reply_text("Is missing a date or a description. Try again.")
         return
 
-    desc_start = message.find('"')
-    desc_end = message.rfind('"')
-
-    description = message[desc_start + 1:desc_end]
+    description = " ".join(message.split(" ")[2:])
     return description
 
-def format_date(update, context, date):
+def format_date(update, context, date, desc_check = False):
 
     if len(date) < 2:
-        update.message.reply_text("Invalid format of date. Try again.")
-        return
+        
+        if not desc_check:
+            update.message.reply_text("Invalid format of date. Try again.")
+        return False
 
     day = str(date[0])
     month = str(date[1])
@@ -40,9 +39,10 @@ def format_date(update, context, date):
         month = "0" + month
 
     formatted_date = f'{YEAR}-{month}-{day}'
+    
     if not is_valid_date(formatted_date):
         update.message.reply_text("Invalid day or month. Try again.")
-        return
+        return False
 
     return formatted_date
 
@@ -53,9 +53,8 @@ def is_valid_date(date):
     except ValueError:
         return False
 
-def send_results(update, context, days):
+def send_results(update, context, days, cursor, table_name):
 
-    cursor, table_name = get_table_name(update, context)
     today = date.today()
 
     match days:
@@ -89,9 +88,6 @@ def send_results(update, context, days):
     message = "\n".join(result_list)
     update.message.reply_text(message)
 
-    cursor.close()
-    database.close()
-
 def start(update, context):
 
 
@@ -100,12 +96,10 @@ def start(update, context):
         Help window
         
         To add an event, write: 
-        '/add <day.month.> <"description">'.
+        '/add <day.month.> <description>'.
         
         The year is 2023 by default, and the description 
         should not exceed 50 characters.
-        The description should be wrapped inside quotation
-        marks.
         
         To list all upcoming events, use command /list.
         Or:
@@ -115,11 +109,11 @@ def start(update, context):
         '/list past' to list events that have already happened
         
         To remove an event, write either:
-        '/remove date <date>', 
+        '/remove <date>', 
         which clears all events from given date,
-        '/remove desc <description>', 
+        '/remove <description>', 
         which deletes all events with given description, or:
-        '/remove spec <date> <description>', 
+        '/remove <date> <description>', 
         which removes the specific event with given info.
         
         Use command /examples to see an example of each 
@@ -134,7 +128,7 @@ def examples(update, context):
         """
         Example commands:
         
-        /add 13.2. "Going to Helsinki"
+        /add 13.2. Going to Helsinki
         
         /list
         /list past
@@ -142,16 +136,13 @@ def examples(update, context):
         /list week
         /list month
         
-        /remove date 13.2.
-        /remove desc "Going to Helsinki"
-        /remove spec 13.2. "Going to Helsinki"
+        /remove 13.2.
+        /remove Going to Helsinki
+        /remove 13.2. Going to Helsinki
         """
     )
 
-def get_defaults(update, context):
-
-    database = sqlite3.connect("calendardatabase.db")
-    cursor = database.cursor()
+def get_table_name(update, context, cursor):
 
     user_id = update.message.from_user.id
     table_name = f"calendar_{user_id}"
@@ -161,25 +152,16 @@ def get_defaults(update, context):
                        f"id INTEGER PRIMARY KEY AUTOINCREMENT,"
                        f"date DATE,"
                        f"description VARCHAR(50))")
-    return cursor, table_name
+
+    return table_name
 
 def user_table_exists(table_name, cursor):
     cursor.execute(f"PRAGMA table_info('{table_name}')")
     result = cursor.fetchall()
     return len(result) > 0
 
+def add_event(update, context, cursor, table_name):
 
-
-
-    """
-    TODO: 
-    - check if user already has a table, if doesn't create a new one
-    - call at the start of every command function
-    - return the user id
-    """
-
-def add_event(update, context):
-    # str maybe
     message = update.message.text
 
     description = get_description(update, context, message)
@@ -194,7 +176,7 @@ def add_event(update, context):
 
     date = info[1].split(".")
     formatted_date = format_date(update, context, date)
-    if formatted_date == "":
+    if not formatted_date:
         return
 
     if len(description) > 50:
@@ -202,31 +184,12 @@ def add_event(update, context):
         return
 
     try:
-        database = sqlite3.connect("calendardatabase.db")
-    except sqlite3.Error as e:
-        print(f"Error connecting to the database: {e}")
-        sys.exit()
-
-    # Create a cursor object
-    cursor, table_name = get_defaults(update, context)
-    # Insert a row into the table
-    try:
         cursor.execute(f"INSERT INTO {table_name} VALUES (NULL, "
                        f"'{formatted_date}', '{description}')")
     except sqlite3.Error as e:
         print(f"Error executing the INSERT INTO statement: {e}")
 
-    # Commit the changes to the database
-    try:
-        database.commit()
-    except sqlite3.Error as e:
-        print(f"Error committing the changes to the database: {e}")
-
-    # Close the cursor and the database connection
-    cursor.close()
-    database.close()
-
-def list_events(update, context):
+def list_events(update, context, cursor, table_name):
     info = update.message.text.split(" ")
 
     if len(info) == 1:
@@ -236,21 +199,19 @@ def list_events(update, context):
 
     match command:
         case "past":
-            send_results(update, context, -1)
+            send_results(update, context, -1, cursor, table_name)
         case "default":
-            send_results(update, context, 0)
+            send_results(update, context, 0, cursor, table_name)
         case "day":
-            send_results(update, context, 1)
+            send_results(update, context, 1, cursor, table_name)
         case "week":
-            send_results(update, context, 7)
+            send_results(update, context, 7, cursor, table_name)
         case "month":
-            send_results(update, context, 30)
+            send_results(update, context, 30, cursor, table_name)
         case _:
             update.message.reply_text("Invalid command. Try again.")
 
-def remove_event(update, context):
-
-    cursor, table_name = get_defaults(update, context)
+def remove_event(update, context, cursor, table_name):
 
     message = update.message.text
     if len(message) < 2:
@@ -258,68 +219,64 @@ def remove_event(update, context):
         return
 
     info = message.split(" ")
-    command = info[1]
 
-    if command == "date":
+    date = info[1].split(".")
+    formatted_date = format_date(update, context, date, True)
 
-        if len(info) < 3:
-            update.message.reply_text("Needs a date. Try again.")
-            return
-        date = info[2].split(".")
-        formatted_date = format_date(update, context, date)
-        if formatted_date == "":
-            return
+    if formatted_date:
 
-        try:
-            cursor.execute(f"DELETE FROM {table_name} "
-                           f"WHERE date(date) = '{formatted_date}'")
-        except sqlite3.Error as e:
-            update.message.reply_text(f"Error removing the event: {e}")
-
-    elif command == "desc":
-
+        if len(info) == 2:
+            cursor.execute(f"DELETE FROM {table_name} W"
+                           f"HERE date(date) = '{formatted_date}'")
+            return 
+       
         description = get_description(update, context, message)
+        
         if description is None:
             return
-        try:
-            cursor.execute(f"DELETE FROM {table_name} "
-                           f"WHERE description = '{description}'")
-        except sqlite3.Error as e:
-            update.message.reply_text(f"Error removing the event: {e}")
-
-    elif command == "spec":
-        if len(info) < 4:
-            update.message.reply_text("Missing either a date or "
-                                      "a description. Try again.")
-            return
-        description = get_description(update, context, message)
-        if description == "":
-            return
-        formatted_date = format_date(update, context, info[2].split("."))
-        if formatted_date == "":
-            return
-
-        try:
-            cursor.execute(f"DELETE FROM {table_name} "
-                           f"WHERE description = '{description}' AND "
-                           f"date(date) = '{formatted_date}'")
-        except sqlite3.Error as e:
-            update.message.reply_text(f"Error removing the event: {e}")
+        
+        cursor.execute(f"DELETE FROM {table_name} "
+                       f"WHERE description = '{description}' AND "
+                       f"date(date) = '{formatted_date}'")
 
     else:
-        update.message.reply_text("Invalid command. Try again.")
+        description = " ".join(info[1:])
+        if description is None:
+            return
+    
+        cursor.execute(f"DELETE FROM {table_name} "
+                       f"WHERE description = '{description}'")
 
-    database.commit()
+
+def main(update, context):
+
+    command = update.message.text.split(" ")[0][1:]
+
+    database = sqlite3.connect("calendardatabase.db")
+    cursor = database.cursor()
+    table_name = get_table_name(update, context, cursor)
+
+    match command:
+        case "add":
+            add_event(update, context, cursor, table_name)
+        case "list":
+            list_events(update, context, cursor, table_name)
+        case "remove":
+            remove_event(update, context, cursor, table_name)
+
+    try:
+        database.commit()
+    except sqlite3.Error as e:
+        print(f"Error committing the changes to the database: {e}")
 
     cursor.close()
     database.close()
 
-dispatcher.add_handler(CommandHandler('add', add_event))
+dispatcher.add_handler(CommandHandler('add', main))
 dispatcher.add_handler(CommandHandler('start', start))
 dispatcher.add_handler(CommandHandler('help', start))
-dispatcher.add_handler(CommandHandler('list', list_events))
-dispatcher.add_handler(CommandHandler('remove', remove_event))
+dispatcher.add_handler(CommandHandler('list', main))
+dispatcher.add_handler(CommandHandler('remove', main))
 dispatcher.add_handler(CommandHandler('examples', examples))
 
 updater.start_polling()
-
